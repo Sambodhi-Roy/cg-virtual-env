@@ -45,6 +45,13 @@ scene.add(ambientLight);
 const sunLight = new THREE.DirectionalLight(0xfff7cc, 1.3);
 sunLight.position.set(40, 60, 30);
 sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.near = 1;
+sunLight.shadow.camera.far = 200;
+sunLight.shadow.camera.left = -120;
+sunLight.shadow.camera.right = 120;
+sunLight.shadow.camera.top = 120;
+sunLight.shadow.camera.bottom = -120;
 scene.add(sunLight);
 
 const sun = new THREE.Mesh(
@@ -56,11 +63,11 @@ scene.add(sun);
 
 // ======== BIGGER ISLAND ========
 // Make island bigger and bumpier
-const islandGeom = new THREE.CircleGeometry(60, 120);
+const islandGeom = new THREE.CircleGeometry(90, 130);
 const islandMat = new THREE.MeshToonMaterial({ color: 0xffe4b5 });
 const island = new THREE.Mesh(islandGeom, islandMat);
 island.rotation.x = -Math.PI / 2;
-island.receiveShadow = true;
+island.castShadow = true;
 scene.add(island);
 
 // Create simple terrain height variation
@@ -77,7 +84,6 @@ pos.needsUpdate = true;
 const loader = new GLTFLoader();
 
 const objects = [
-  { file: "Campfire.glb", scale: 1.5, pos: [5, 0, 6], rotY: 0 },
   { file: "Chest.glb", scale: 1.5, pos: [-8, 0, -5], rotY: Math.PI / 3 },
   {
     file: "Chest-with-Gold.glb",
@@ -119,15 +125,156 @@ function getIslandHeight(x, z) {
   return baseHeight + randomVariation;
 }
 
+// ======== DYNAMIC CAMPFIRE ========
+
+let campfireBase = null;
+let campfireFlame = null;
+let firePosition = null;
+
+// ======== CAMPFIRE FIXED ========
+
+function createCampfireBase() {
+  loader.load("models/Campfire.glb", (gltf) => {
+    campfireBase = gltf.scene;
+    let placed = false;
+
+    while (!placed) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 25 + Math.random() * 15; // near center, open area
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const dist = Math.sqrt(x * x + z * z);
+
+      if (dist < 80 && dist > 10) {
+        const y = getIslandHeight(x, z) + 1.0; // lifted slightly above ground
+
+        campfireBase.position.set(x, y, z);
+        campfireBase.scale.set(1.5, 1.5, 1.5);
+        campfireBase.rotation.y = Math.random() * Math.PI * 2;
+
+        campfireBase.traverse((o) => {
+          if (o.isMesh) {
+            o.castShadow = true;
+            o.receiveShadow = true;
+          }
+        });
+
+        scene.add(campfireBase);
+        firePosition = { x, y, z };
+        placed = true;
+      }
+    }
+  });
+}
+
+// Create the actual flame (appears ONLY at night)
+function createCampfireFlame() {
+  if (!firePosition) return;
+
+  const flameGeo = new THREE.ConeGeometry(1, 3, 12, 1);
+  const flameMat = new THREE.MeshStandardMaterial({
+    color: 0xff6600,
+    emissive: 0xff4400,
+    emissiveIntensity: 1.2,
+    transparent: true,
+    opacity: 0.9,
+  });
+
+  campfireFlame = new THREE.Mesh(flameGeo, flameMat);
+  campfireFlame.position.set(firePosition.x, firePosition.y + 2.3, firePosition.z);
+  campfireFlame.visible = false; // start hidden (daytime)
+  scene.add(campfireFlame);
+}
+
+// Start with only sticks visible
+createCampfireBase();
+
+// Helper: Turn the flame on or off when night/day switches
+// Helper: Turn the flame on or off when night/day switches
+function toggleCampfire(isNight) {
+  if (isNight) {
+    // 🔥 NIGHT: show flame, flicker enabled
+    if (!campfireFlame) createCampfireFlame();
+    if (campfireFlame) campfireFlame.visible = true;
+  } else {
+    // ☀️ DAY: hide flame, no flicker
+    if (campfireFlame) campfireFlame.visible = false;
+  }
+}
+
+// ======== BUSHES ========
+// Function to create a single bush at (x, z)
+function createBush(x, z) {
+  const bush = new THREE.Group();
+
+  // Random green tones for variation
+  const leafColor = new THREE.Color().setHSL(
+    0.33 + Math.random() * 0.05, // hue variation
+    0.7,
+    0.3 + Math.random() * 0.1 // slight brightness difference
+  );
+  const bushMat = new THREE.MeshStandardMaterial({
+    color: leafColor,
+    roughness: 0.9,
+  });
+
+  // Randomize size and shape
+  const bushSize = 1.5 + Math.random();
+  for (let i = 0; i < 3; i++) {
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(bushSize * (0.6 + Math.random() * 0.4), 12, 12),
+      bushMat
+    );
+    sphere.position.set(
+      (Math.random() - 0.5) * bushSize,
+      Math.random() * 0.3,
+      (Math.random() - 0.5) * bushSize
+    );
+    bush.add(sphere);
+  }
+
+  // Position bush slightly above terrain height
+  bush.position.set(x, getIslandHeight(x, z) + 0.4, z);
+
+  // Enable shadows
+  bush.traverse(o => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+    }
+  });
+
+  scene.add(bush);
+}
+
+// ======== RANDOMIZED BUSHES ========
+const BUSH_COUNT = 30;
+for (let i = 0; i < BUSH_COUNT; i++) {
+  const angle = Math.random() * Math.PI * 2;
+  const radius = 8 + Math.random() * 75; // evenly distributed
+  const x = Math.cos(angle) * radius;
+  const z = Math.sin(angle) * radius;
+  const dist = Math.sqrt(x * x + z * z);
+  if (dist < 85 && dist > 5) createBush(x, z);
+}
+
 // ======== TREES & ROCKS ACROSS ISLAND ========
 function createCoconutTree(x, z, heightBoost = 0) {
   const tree = new THREE.Group();
+
   const trunkHeight = 14 + Math.random() * 3 + heightBoost;
+  const trunkMat = new THREE.MeshStandardMaterial({
+    color: 0x8b5a2b,
+    roughness: 0.8,
+  });
+
   const trunk = new THREE.Mesh(
     new THREE.CylinderGeometry(0.45, 0.7, trunkHeight, 12),
-    new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.8 })
+    trunkMat
   );
   trunk.position.y = trunkHeight / 2;
+  trunk.castShadow = true;
+  trunk.receiveShadow = true;
   tree.add(trunk);
 
   // Leaves
@@ -143,12 +290,16 @@ function createCoconutTree(x, z, heightBoost = 0) {
     leaf.position.y = trunkHeight;
     leaf.rotation.y = (i * Math.PI * 2) / 8;
     leaf.rotation.z = -Math.PI / 4;
+
     const pos = leaf.geometry.attributes.position;
     for (let j = 0; j < pos.count; j++) {
-      const x = pos.getX(j);
-      pos.setZ(j, Math.sin((x / 8) * Math.PI) * 0.7);
+      const lx = pos.getX(j);
+      pos.setZ(j, Math.sin((lx / 8) * Math.PI) * 0.7);
     }
     pos.needsUpdate = true;
+
+    leaf.castShadow = true;
+    leaf.receiveShadow = true;
     tree.add(leaf);
   }
 
@@ -163,27 +314,40 @@ function createCoconutTree(x, z, heightBoost = 0) {
       trunkHeight - 1.0,
       Math.cos(angle) * 0.7
     );
+    nut.castShadow = true;
+    nut.receiveShadow = true;
     tree.add(nut);
   }
 
-  tree.position.set(x, 1.5, z); // keep above terrain
+  // Place tree on terrain
+  const terrainY = getIslandHeight(x, z);
+  tree.position.set(x, terrainY, z);
+
+  tree.castShadow = true;
+  tree.receiveShadow = true;
+
   scene.add(tree);
 }
 
-// Generate 20 trees randomly across island
-for (let i = 0; i < 35; i++) {
-  // instead of 20
+// ======== TREES RANDOMLY SPREAD ACROSS THE WHOLE ISLAND ========
+// ======== RANDOMIZED TREES ========
+const TREE_COUNT = 60;
+for (let i = 0; i < TREE_COUNT; i++) {
   const angle = Math.random() * Math.PI * 2;
-  const radius = 8 + Math.random() * 40;
+  const radius = 8 + Math.pow(Math.random(), 1.2) * 75;
   const x = Math.cos(angle) * radius;
   const z = Math.sin(angle) * radius;
-  if (Math.sqrt(x * x + z * z) < 50) createCoconutTree(x, z);
+  const dist = Math.sqrt(x * x + z * z);
+  if (dist < 85 && dist > 5) {
+    const heightBoost = Math.random() * 1.5;
+    createCoconutTree(x, z, heightBoost);
+  }
 }
 
-for (let i = 0; i < 15; i++) {
-  // instead of 8
+// ======== RANDOMIZED ROCKS ========
+for (let i = 0; i < 20; i++) {
   const rock = new THREE.Mesh(
-    new THREE.DodecahedronGeometry(3 + Math.random() * 2),
+    new THREE.DodecahedronGeometry(2.5 + Math.random() * 2.5),
     new THREE.MeshStandardMaterial({
       color: 0x888888,
       roughness: 1.0,
@@ -191,11 +355,16 @@ for (let i = 0; i < 15; i++) {
     })
   );
   const angle = Math.random() * Math.PI * 2;
-  const radius = 15 + Math.random() * 40;
-  rock.position.set(Math.cos(angle) * radius, 1, Math.sin(angle) * radius);
-  rock.castShadow = true;
-  rock.receiveShadow = true;
-  scene.add(rock);
+  const radius = 8 + Math.random() * 78;
+  const x = Math.cos(angle) * radius;
+  const z = Math.sin(angle) * radius;
+  const dist = Math.sqrt(x * x + z * z);
+  if (dist < 85 && dist > 6) {
+    rock.position.set(x, getIslandHeight(x, z), z);
+    rock.castShadow = true;
+    rock.receiveShadow = true;
+    scene.add(rock);
+  }
 }
 
 // ======== SEA ========
@@ -257,15 +426,81 @@ function spawnChestRandomly() {
     scene.add(chestModel);
   });
 }
+// ======== FAKE CHESTS ========
+function addFakeChests() {
+  const FAKE_CHEST_COUNT = 4;
 
-// ======== BOAT ========
+  for (let i = 0; i < FAKE_CHEST_COUNT; i++) {
+    loader.load("models/Chest.glb", (gltf) => {
+      const fake = gltf.scene;
+      let placed = false;
+      while (!placed) {
+        const angle = Math.random() * Math.PI * 2;
+        const radius = 10 + Math.random() * 75;
+        const x = Math.cos(angle) * radius;
+        const z = Math.sin(angle) * radius;
+        const dist = Math.sqrt(x * x + z * z);
+        if (dist < 85) { // inside island
+          const y = getIslandHeight(x, z) + 0.7;
+          fake.position.set(x, y, z);
+          fake.scale.set(1.3, 1.3, 1.3);
+          fake.rotation.y = Math.random() * Math.PI * 2;
+          fake.traverse(o => {
+            if (o.isMesh) o.castShadow = o.receiveShadow = true;
+          });
+          scene.add(fake);
+          placed = true;
+        }
+      }
+    });
+  }
+}
+addFakeChests(); // call once at load
+
+
+// ======== BOATS ========
+
+// 1️⃣ Main island boat (stationary, decorative)
 loader.load("models/Boat.glb", (gltf) => {
   boat = gltf.scene;
   boat.scale.set(1.2, 1.2, 1.2);
-  boat.position.set(45, getIslandHeight(45, -20) + 0.5, -20);
-  boat.rotation.y = Math.PI / 2.5;
-  boat.traverse((o) => o.isMesh && (o.castShadow = o.receiveShadow = true));
+
+  // Find a safe land position with enough space, not near trees
+  const angle = Math.random() * Math.PI * 2;
+  const radius = 20 + Math.random() * 40; // somewhere inland but not center
+  const x = Math.cos(angle) * radius;
+  const z = Math.sin(angle) * radius;
+  const y = getIslandHeight(x, z) + 0.5;
+
+  boat.position.set(x, y, z);
+  boat.rotation.y = Math.random() * Math.PI * 2;
+
+  boat.traverse(o => {
+    if (o.isMesh) o.castShadow = o.receiveShadow = true;
+  });
   scene.add(boat);
+});
+
+
+// 2️⃣ Shore boat (slightly bobbing on water near edge)
+let shoreBoat;
+loader.load("models/Boat.glb", (gltf) => {
+  shoreBoat = gltf.scene;
+  shoreBoat.scale.set(1.2, 1.2, 1.2);
+
+  const angle = Math.random() * Math.PI * 2;
+  const radius = 88; // near shore (island radius ≈ 90)
+  const x = Math.cos(angle) * radius;
+  const z = Math.sin(angle) * radius;
+  const y = 0.35; // just above sea level
+
+  shoreBoat.position.set(x, y, z);
+  shoreBoat.rotation.y = Math.random() * Math.PI * 2;
+
+  shoreBoat.traverse(o => {
+    if (o.isMesh) o.castShadow = o.receiveShadow = true;
+  });
+  scene.add(shoreBoat);
 });
 
 // ======== DOLPHINS ========
@@ -273,11 +508,49 @@ loader.load("models/Dolphin.glb", (gltf) => {
   const base = gltf.scene;
   base.scale.set(0.25, 0.25, 0.25);
   base.traverse((o) => o.isMesh && (o.castShadow = o.receiveShadow = true));
-  const d1 = base.clone(),
-    d2 = base.clone();
-  scene.add(d1, d2);
-  dolphins.push(d1, d2);
+
+  const dolphinCount = 14; // total dolphins
+  const nearShoreCount = 2; // 1–2 near the island shore
+
+  for (let i = 0; i < dolphinCount; i++) {
+    const dolphin = base.clone();
+
+    // 🐬 Decide zone
+    const isNear = i < nearShoreCount;
+
+    // Radii setup:
+    // - Near dolphins: slightly away from shore (95–105)
+    // - Mid dolphins: mid-distance zone (105–140)
+    const radius = isNear
+      ? 95 + Math.random() * 10 // near shore but not too close
+      : 105 + Math.random() * 35; // mid-water zone (not too far)
+
+    // Evenly spaced angles around island with randomness
+    const angle = (i / dolphinCount) * Math.PI * 2 + Math.random() * 0.3;
+    const centerX = Math.cos(angle) * radius;
+    const centerZ = Math.sin(angle) * radius;
+
+    // Slightly bigger swim zone for mid dolphins
+    const swimRange = isNear ? 3 + Math.random() * 3 : 6 + Math.random() * 6;
+
+    dolphin.position.set(centerX, 1.5, centerZ);
+    dolphin.rotation.y = Math.atan2(-centerZ, -centerX);
+    scene.add(dolphin);
+
+    dolphins.push({
+      mesh: dolphin,
+      baseX: centerX,
+      baseZ: centerZ,
+      swimRange,
+      diveSpeed: 1.5 + Math.random() * 1.5,
+      diveHeight: 3 + Math.random() * 2,
+      diveDepth: 2 + Math.random() * 1.5,
+      offset: Math.random() * Math.PI * 2,
+      isNear,
+    });
+  }
 });
+
 
 // ======== UI ========
 const message = document.createElement("div");
@@ -386,6 +659,8 @@ nightBtn.onclick = () => {
     moon.position.set(-80, 60, 60);
     scene.add(moon);
 
+    toggleCampfire(true);
+
     nightBtn.textContent = "☀️ Day Mode";
     nightBtn.style.background = "#222";
     nightBtn.style.color = "#fff";
@@ -398,6 +673,8 @@ nightBtn.onclick = () => {
     sun.visible = true;
     if (moon) scene.remove(moon);
     moon = null;
+
+    toggleCampfire(false);
 
     nightBtn.textContent = "🌙 Night Mode";
     nightBtn.style.background = "#fff";
@@ -450,16 +727,41 @@ function animate() {
   controls.update();
 
   if (girlController && !gameWon && !overheadMode) {
-    girlController.update(delta);
-    if (chestModel && girlModel) {
-      const dist = girlModel.position.distanceTo(chestModel.position);
-      if (dist < 5 && !gameWon) {
-        gameWon = true;
-        message.textContent = "🎉 You found the Treasure!";
-        message.style.color = "#FFD700";
-      }
+  girlController.update(delta);
+
+    // ======== BOUNDARY CONSTRAINT: keep girl on island ========
+  const maxRadius = 77; // safe shore boundary inside island
+  const pos = girlModel.position;
+  const distanceFromCenter = Math.sqrt(pos.x * pos.x + pos.z * pos.z);
+
+  if (distanceFromCenter > maxRadius) {
+    // Push her gently back inside the boundary
+    const angle = Math.atan2(pos.z, pos.x);
+    pos.x = Math.cos(angle) * maxRadius;
+    pos.z = Math.sin(angle) * maxRadius;
+    // Keep her slightly above terrain height
+    pos.y = getIslandHeight(pos.x, pos.z) + 2.4;
+  } else {
+    // Normal terrain following
+    pos.y = getIslandHeight(pos.x, pos.z) + 2.4;
+  }
+
+  function getIslandHeight(x, z) {
+  const dist = Math.sqrt(x * x + z * z);
+  const baseHeight = Math.max(0, 4 - dist * 0.08);
+  const wave = Math.sin(x * 0.1) * 0.15 + Math.cos(z * 0.1) * 0.1;
+  return baseHeight + wave;
+}
+
+  if (chestModel && girlModel) {
+    const dist = girlModel.position.distanceTo(chestModel.position);
+    if (dist < 5 && !gameWon) {
+      gameWon = true;
+      message.textContent = "🎉 You found the Treasure!";
+      message.style.color = "#FFD700";
     }
   }
+}
 
   const posSea = seaGeom.attributes.position;
   for (let i = 0; i < posSea.count; i++) {
@@ -472,21 +774,40 @@ function animate() {
   }
   posSea.needsUpdate = true;
 
-  if (boat) {
-    boat.position.y = getIslandHeight(45, -20) + 0.5 + Math.sin(t * 1.5) * 0.2;
-    boat.rotation.z = Math.sin(t * 0.8) * 0.05;
-  }
+  // Stationary island boat (no bobbing)
+if (boat) {
+  // stays still, no movement
+  boat.rotation.z = 0;
+}
 
-  dolphins.forEach((d, i) => {
-    const cycle = t * 0.8 + (i * Math.PI) / 2;
-    d.position.set(
-      Math.sin(cycle) * 60 + i * 5,
-      1.5 + Math.sin(cycle * 2) * 3,
-      -100
-    );
-    d.rotation.y = Math.cos(cycle) > 0 ? Math.PI : 0;
-  });
+// Slightly bobbing shore boat
+if (shoreBoat) {
+  shoreBoat.position.y = 0.35 + Math.sin(t * 1.2) * 0.15;
+  shoreBoat.rotation.z = Math.sin(t * 0.8) * 0.05;
+}
 
+  // ======== DOLPHINS ANIMATION (dive zones) ========
+dolphins.forEach((d) => {
+  const mesh = d.mesh;
+  const time = t * d.diveSpeed + d.offset;
+
+  // Horizontal swim motion inside small local range
+  const localX = d.baseX + Math.sin(time * 0.5) * d.swimRange;
+  const localZ = d.baseZ + Math.cos(time * 0.5) * d.swimRange;
+
+  // Vertical dive motion (up + down under water)
+  const diveY =
+    0.5 + Math.sin(time * 2) * d.diveHeight - Math.abs(Math.cos(time * 1.2)) * d.diveDepth;
+
+  mesh.position.set(localX, diveY, localZ);
+  mesh.rotation.y = Math.atan2(-localZ, -localX);
+});
+
+  // Flicker flame only when visible (nighttime)
+if (campfireFlame && campfireFlame.visible) {
+  const scale = 1 + Math.sin(t * 10) * 0.1;
+  campfireFlame.scale.set(scale, scale, scale);
+}
   renderer.render(scene, camera);
 }
 animate();
@@ -496,4 +817,4 @@ window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-});
+});  
